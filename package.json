@@ -1,0 +1,24 @@
+{
+  "name": "tinyrss",
+  "type": "module",
+  "private": true,
+  "bin": { "tinyrss": "src/cli.ts" },
+  "scripts": {
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "cli": "bun src/cli.ts",
+    "test": "bun test",
+    "typecheck": "bun check"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.12.1",
+    "hono": "^4.13.19"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "libseymour": "^0.9.0"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}
