@@ -39,6 +39,28 @@ export async function setCredentials(db: DB, username: string, password: string)
   })();
 }
 
+/**
+ * Make the stored credentials match TINYRSS_USERNAME / TINYRSS_PASSWORD, if set. Intended for
+ * container deployments where running the CLI is awkward. Only writes (and thereby logs out
+ * all sessions) when something actually changed.
+ */
+export async function syncCredentialsFromEnv(
+  db: DB,
+  env: { username?: string; password?: string },
+): Promise<"unset" | "unchanged" | "created" | "updated"> {
+  if (!env.password) return "unset";
+  const username = env.username?.trim() || getUsername(db) || "admin";
+  if (!hasCredentials(db)) {
+    await setCredentials(db, username, env.password);
+    return "created";
+  }
+  const current = getUsername(db);
+  const hash = getSetting(db, "password_hash")!;
+  if (current === username && (await Bun.password.verify(env.password, hash).catch(() => false))) return "unchanged";
+  await setCredentials(db, username, env.password);
+  return "updated";
+}
+
 export async function verifyCredentials(db: DB, username: string, password: string): Promise<boolean> {
   const user = getSetting(db, "username");
   const hash = getSetting(db, "password_hash");

@@ -3,7 +3,7 @@ import type { DB } from "./db.ts";
 import { greaderApi } from "./greader.ts";
 import { webUi } from "./web.ts";
 
-export function createApp(db: DB): Hono {
+export function createApp(db: DB, opts: { warning?: string | null } = {}): Hono {
   const app = new Hono();
   const greader = greaderApi(db);
 
@@ -20,6 +20,6 @@ export function createApp(db: DB): Hono {
   app.route("/api/greader.php", greader);
   app.route("/", greader);
 
-  app.route("/", webUi(db));
+  app.route("/", webUi(db, opts));
   return app;
 }

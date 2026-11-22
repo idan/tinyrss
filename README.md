@@ -38,6 +38,67 @@ The API is also served at `/api/greader.php` and at the host root (`/accounts/Cl
 (Caddy, nginx, Tailscale serve, …) if it's reachable from outside your machine; `X-Forwarded-Proto`
 and `X-Forwarded-Host` are respected.
 
+## Deploying with Docker / Coolify
+
+The repo includes a `Dockerfile` (non-root, ~100 MB, with a built-in healthcheck) and a
+`docker-compose.yml`. Inside the container:
+
+- the database lives at `/data/tinyrss.db`, so **`/data` must be a persistent volume**. If it isn't, the
+  server logs a warning and shows a banner in the web UI;
+- the CLI is available as `tinyrss <command>`, e.g. `tinyrss refresh`;
+- credentials can come from `TINYRSS_USERNAME` (default `admin`) / `TINYRSS_PASSWORD`. They are
+  applied at startup. If they changed, all apps and browsers are logged out. If you prefer to
+  manage the password with `tinyrss set-password`, leave `TINYRSS_PASSWORD` empty.
+
+### Coolify (Docker Compose build pack, recommended)
+
+The compose file declares the volume, so there's no way to forget it.
+
+1. Push this repo to GitHub/GitLab (Coolify can deploy private repos via its GitHub App).
+2. Point a DNS record (e.g. `rss.example.com`) at your Coolify server.
+3. In Coolify: **Project → New Resource → (Public/Private) Repository**, pick the repo and branch,
+   then set **Build Pack** to **Docker Compose** (compose file `/docker-compose.yml`).
+4. **Domains**: on the `tinyrss` service, set the domain to `https://rss.example.com:8080`.
+   The `:8080` tells Coolify's proxy which container port to route to. It is not exposed
+   publicly, and HTTPS certificates are issued automatically.
+5. **Environment Variables**: Coolify lists the variables found in the compose file. Set
+   `TINYRSS_PASSWORD` (≥ 8 characters) and optionally `TINYRSS_USERNAME`.
+6. **Deploy**. The logs should show `tinyrss listening on …` and no volume warning.
+7. Open `https://rss.example.com`, log in, and import your OPML (or add feeds).
+8. In your reader apps use `https://rss.example.com/api/greader` as the server URL.
+
+### Coolify (Dockerfile build pack)
+
+Same as above, but choose **Dockerfile** as the build pack, then:
+
+- set **Ports Exposes** to `8080` and the domain to `https://rss.example.com`;
+- under **Persistent Storage**, add a **Volume Mount** with destination `/data`. Use a volume, not a
+  directory (bind) mount: a new volume inherits the right ownership from the image, while a host
+  directory has to be `chown 1000:1000`;
+- add the environment variables under **Environment Variables**.
+
+### Backups
+
+Coolify's scheduled backups only cover databases that Coolify manages, not an app's SQLite
+file. Use a Coolify **Scheduled Task** on the service (e.g. daily, `0 4 * * *`):
+
+```sh
+tinyrss backup "/data/backups/tinyrss-{date}.db" --keep 7
+```
+
+This writes consistent snapshots (via `VACUUM INTO`, safe while running) to the volume. Copy
+them off the server with your usual volume/server backup. Exporting OPML from the web UI
+also gives you a portable copy of your subscriptions.
+
+### Plain Docker
+
+```sh
+docker build -t tinyrss .
+docker run -d --name tinyrss --restart unless-stopped \
+  -p 8080:8080 -v tinyrss-data:/data -e TINYRSS_PASSWORD='change me please' tinyrss
+# or: uncomment `ports:` in docker-compose.yml and run `docker compose up -d`
+```
+
 ## CLI
 
 ```
@@ -55,6 +116,7 @@ bun run cli <command>
   remove <url-or-id>                 Unsubscribe
   list                               List subscriptions
   refresh [--force]                  Fetch all feeds now
+  backup <file> [--keep N]           Consistent DB snapshot ("{date}" in the name → timestamp)
 
   --db PATH                          Database path (default $TINYRSS_DB or ./data/tinyrss.db)
 ```
@@ -68,7 +130,9 @@ Environment variables (Bun loads `.env` automatically):
 
 | Variable                    | Default              | Description                                          |
 | --------------------------- | -------------------- | ---------------------------------------------------- |
-| `TINYRSS_DB`                | `./data/tinyrss.db`  | SQLite database path                                 |
+| `TINYRSS_DB`                | `./data/tinyrss.db`  | SQLite database path (`/data/tinyrss.db` in Docker)  |
+| `TINYRSS_USERNAME`          | `admin`              | Username applied at startup (only if `TINYRSS_PASSWORD` is set) |
+| `TINYRSS_PASSWORD`          |                      | If set, the password is (re)applied at startup       |
 | `PORT` / `HOST`             | `8080` / `0.0.0.0`   | Listen address                                       |
 | `TINYRSS_FETCH_INTERVAL`    | `30`                 | Minutes between refreshes of each feed               |
 | `TINYRSS_RETENTION_DAYS`    | `90`                 | Read, unstarred, unlabelled items older than this are deleted (`0` = keep forever) |

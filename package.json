@@ -2,7 +2,9 @@
   "name": "tinyrss",
   "type": "module",
   "private": true,
-  "bin": { "tinyrss": "src/cli.ts" },
+  "bin": {
+    "tinyrss": "src/cli.ts"
+  },
   "scripts": {
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
@@ -16,9 +18,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",
-    "libseymour": "^0.9.0"
-  },
-  "peerDependencies": {
+    "libseymour": "^0.9.0",
     "typescript": "^7"
   }
 }

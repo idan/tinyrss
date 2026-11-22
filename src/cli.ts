@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { getUsername, hasCredentials, listTokens, revokeAllTokens, setCredentials } from "./auth.ts";
 import { config } from "./config.ts";
@@ -9,7 +11,7 @@ import { addFeed, deleteFeed, feedDisplayTitle, findFeed, listFeeds } from "./st
 
 const HELP = `tinyrss — single-user RSS reader with a Google Reader compatible API
 
-Usage: bun run cli <command> [options]
+Usage: bun run cli <command> [options]   (in the Docker image: tinyrss <command>)
 
 Commands:
   serve [--port N] [--host H]        Run the web server and feed fetcher
@@ -25,6 +27,9 @@ Commands:
   remove <url-or-id>                 Unsubscribe
   list                               List subscriptions
   refresh [--force]                  Fetch all feeds now
+  backup <file> [--keep N]           Write a consistent snapshot of the database (safe while
+                                     the server runs). "{date}" in the name is replaced by a
+                                     timestamp; --keep prunes older snapshots of that pattern.
 
 Global options:
   --db PATH     SQLite database path (default: $TINYRSS_DB or ./data/tinyrss.db)
@@ -85,6 +90,7 @@ async function main() {
       title: { type: "string" },
       fetch: { type: "boolean" },
       force: { type: "boolean" },
+      keep: { type: "string" },
       api: { type: "boolean" },
       web: { type: "boolean" },
       "password-stdin": { type: "boolean" },
@@ -100,7 +106,7 @@ async function main() {
 
   if (cmd === "serve") {
     const { serve } = await import("./server.ts");
-    serve({ dbPath, port: values.port ? Number(values.port) : undefined, hostname: values.host });
+    await serve({ dbPath, port: values.port ? Number(values.port) : undefined, hostname: values.host });
     return;
   }
 
@@ -120,6 +126,9 @@ async function main() {
           password = await readPasswordFromTty("Password: ");
           const again = await readPasswordFromTty("Repeat password: ");
           if (password !== again) throw new Error("passwords do not match");
+        }
+        if (config.password) {
+          console.warn("warning: TINYRSS_PASSWORD is set; the server will reset the password to it on next start.");
         }
         const had = hasCredentials(db);
         await setCredentials(db, username, password);
@@ -189,11 +198,35 @@ async function main() {
       case "refresh":
         await refresh(db, !!values.force);
         break;
+      case "backup": {
+        if (!args[0]) throw new Error("usage: backup <file> [--keep N]");
+        await backup(db, args[0], values.keep ? Number(values.keep) : undefined);
+        break;
+      }
       default:
         throw new Error(`unknown command "${cmd}" (see --help)`);
     }
   } finally {
     db.close();
+  }
+}
+
+async function backup(db: DB, pattern: string, keep?: number) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const target = resolve(pattern.replace("{date}", stamp));
+  if (existsSync(target)) throw new Error(`${target} already exists`);
+  mkdirSync(dirname(target), { recursive: true });
+  db.query("VACUUM INTO ?").run(target);
+  console.log(`Backed up to ${target}`);
+  if (keep !== undefined && pattern.includes("{date}")) {
+    if (!Number.isInteger(keep) || keep < 1) throw new Error("--keep must be a positive integer");
+    const [prefix, suffix] = basename(pattern).split("{date}") as [string, string];
+    const old = readdirSync(dirname(target))
+      .filter((f) => f.startsWith(prefix) && f.endsWith(suffix) && f.length === prefix.length + stamp.length + suffix.length)
+      .sort()
+      .slice(0, -keep);
+    for (const f of old) rmSync(join(dirname(target), f));
+    if (old.length) console.log(`Removed ${old.length} old backup(s).`);
   }
 }
 

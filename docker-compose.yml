@@ -1,0 +1,23 @@
+# Works with Coolify's "Docker Compose" build pack as well as plain `docker compose up -d`.
+services:
+  tinyrss:
+    build: .
+    restart: unless-stopped
+    environment:
+      # Credentials are (re)applied on every start. Leave TINYRSS_PASSWORD empty to manage
+      # them with `tinyrss set-password` inside the container instead.
+      - TINYRSS_USERNAME=${TINYRSS_USERNAME:-admin}
+      - TINYRSS_PASSWORD=${TINYRSS_PASSWORD:-}
+      - TINYRSS_FETCH_INTERVAL=${TINYRSS_FETCH_INTERVAL:-30}
+      - TINYRSS_RETENTION_DAYS=${TINYRSS_RETENTION_DAYS:-90}
+    volumes:
+      - tinyrss-data:/data
+    # Coolify routes traffic through its proxy, so no host port is needed there.
+    # For plain Docker, uncomment to publish the port:
+    # ports:
+    #   - "8080:8080"
+    expose:
+      - "8080"
+
+volumes:
+  tinyrss-data:

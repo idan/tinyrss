@@ -54,7 +54,7 @@ function fmtDuration(s: number): string {
   return `${Math.round(s / 86400)}d`;
 }
 
-function page(title: string, body: unknown, opts: { nav?: boolean; flash?: string | null } = {}) {
+function page(title: string, body: unknown, opts: { nav?: boolean; flash?: string | null; banner?: unknown } = {}) {
   return html`<!doctype html>
     <html lang="en">
       <head>
@@ -73,7 +73,7 @@ function page(title: string, body: unknown, opts: { nav?: boolean; flash?: strin
                 <form class="inline" method="post" action="/logout"><button class="link">Log out</button></form>`
             : ""}
         </header>
-        ${opts.flash ? html`<div class="flash">${opts.flash}</div>` : ""} ${body}
+        ${opts.banner ?? ""} ${opts.flash ? html`<div class="flash">${opts.flash}</div>` : ""} ${body}
       </body>
     </html>`;
 }
@@ -94,8 +94,9 @@ function apiBaseUrl(c: Context): string {
   return `${proto}://${host}/api/greader`;
 }
 
-export function webUi(db: DB): Hono {
+export function webUi(db: DB, opts: { warning?: string | null } = {}): Hono {
   const app = new Hono();
+  const banner = opts.warning ? html`<div class="flash error">⚠ ${opts.warning}</div>` : "";
 
   // CSRF protection: reject cross-origin form posts. (The session cookie is also SameSite=Lax.)
   app.use("*", async (c, next) => {
@@ -120,7 +121,8 @@ export function webUi(db: DB): Hono {
       page(
         "Log in",
         setup
-          ? html`<p>No credentials are configured yet. Run:</p>
+          ? html`<p>No credentials are configured yet. Either set the <code>TINYRSS_PASSWORD</code> (and optionally
+                <code>TINYRSS_USERNAME</code>) environment variables and restart, or run:</p>
               <p><code>bun run cli set-password &lt;username&gt;</code></p>`
           : html`<form method="post" action="/login" class="stack" style="max-width: 22rem">
               ${err ? html`<p class="error">Invalid username or password.</p>` : ""}
@@ -255,7 +257,7 @@ export function webUi(db: DB): Hono {
         <button>Import</button>
       </form>
     `;
-    return c.html(page("Subscriptions", body, { nav: true, flash: c.req.query("msg") }));
+    return c.html(page("Subscriptions", body, { nav: true, flash: c.req.query("msg"), banner }));
   });
 
   app.post("/feeds", async (c) => {

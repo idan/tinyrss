@@ -17,5 +17,8 @@ export const config = {
   retentionDays: num("TINYRSS_RETENTION_DAYS", 90),
   /** How many feeds are fetched in parallel. */
   fetchConcurrency: num("TINYRSS_FETCH_CONCURRENCY", 6),
+  /** Optional: if set, the server makes the stored credentials match these on startup. */
+  username: process.env.TINYRSS_USERNAME || undefined,
+  password: process.env.TINYRSS_PASSWORD || undefined,
   userAgent: process.env.TINYRSS_USER_AGENT ?? "tinyrss/0.1 (+https://github.com/; single-user feed reader)",
 };
