@@ -40,7 +40,7 @@ and `X-Forwarded-Host` are respected.
 
 ## Deploying with Docker / Coolify
 
-The repo includes a `Dockerfile` (non-root, ~100 MB, with a built-in healthcheck) and a
+The repo includes a `Dockerfile` (runs as non-root, with a built-in healthcheck) and a
 `docker-compose.yml`. Inside the container:
 
 - the database lives at `/data/tinyrss.db`, so **`/data` must be a persistent volume**. If it isn't, the
