@@ -10,7 +10,8 @@
     "dev": "bun --watch src/server.ts",
     "cli": "bun src/cli.ts",
     "test": "bun test",
-    "typecheck": "bun check"
+    "typecheck": "bun check",
+    "db:snapshot": "bun scripts/db-snapshot.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^5.12.1",

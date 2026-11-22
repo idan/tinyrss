@@ -3,7 +3,12 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { html, raw } from "hono/html";
 import { checkToken, createToken, getUsername, hasCredentials, revokeToken, verifyCredentials } from "./auth.ts";
+import type { AppOptions } from "./app.ts";
+import { backupStatus, createBackup, fmtBytes, hasPendingRestore, listLocalBackups } from "./backup.ts";
 import type { DB } from "./db.ts";
+import { BACKUP_FILE_RE } from "./snapshot.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { discoverFeed, fetchFeed, fetchFeeds } from "./fetcher.ts";
 import { exportOpml, importOpml } from "./opml.ts";
 import { addFeed, deleteFeed, deleteTag, feedDisplayTitle, getFeed, listFeeds, listTags, renameTag, updateFeed } from "./store.ts";
@@ -94,7 +99,7 @@ function apiBaseUrl(c: Context): string {
   return `${proto}://${host}/api/greader`;
 }
 
-export function webUi(db: DB, opts: { warning?: string | null } = {}): Hono {
+export function webUi(db: DB, opts: AppOptions = {}): Hono {
   const app = new Hono();
   const banner = opts.warning ? html`<div class="flash error">⚠ ${opts.warning}</div>` : "";
 
@@ -251,6 +256,8 @@ export function webUi(db: DB, opts: { warning?: string | null } = {}): Hono {
             )}
           </table>`}
 
+      ${backupsSection()}
+
       <h2>Import OPML</h2>
       <form method="post" action="/import" enctype="multipart/form-data" class="row">
         <input type="file" name="file" accept=".opml,.xml,text/xml,text/x-opml" required />
@@ -258,6 +265,77 @@ export function webUi(db: DB, opts: { warning?: string | null } = {}): Hono {
       </form>
     `;
     return c.html(page("Subscriptions", body, { nav: true, flash: c.req.query("msg"), banner }));
+  });
+
+  function backupsSection() {
+    const settings = opts.backups;
+    if (!settings) return "";
+    const status = backupStatus(db);
+    const local = listLocalBackups(settings.dir);
+    const shown = local.slice(0, 15);
+    const pending = opts.dbPath && hasPendingRestore(opts.dbPath);
+    return html`
+      <h2>Backups</h2>
+      ${pending
+        ? html`<p class="error">A restore is staged and will be applied when the server restarts.</p>`
+        : ""}
+      <p class="muted">
+        ${settings.intervalHours > 0
+          ? `Automatic backups every ${settings.intervalHours}h, keeping the latest ${settings.keep}.`
+          : "Automatic backups are disabled."}
+        Last backup: ${fmtAgo(status.lastAt)}.
+        ${status.lastError ? html`<br /><span class="error">Last error: ${status.lastError}</span>` : ""}
+        <br />
+        ${settings.s3
+          ? html`Off-site copies: <code>s3://${settings.s3.bucket}/${settings.s3.prefix}</code>, last upload
+              ${fmtAgo(status.s3LastAt)}.
+              ${status.s3LastError ? html`<br /><span class="error">Last upload error: ${status.s3LastError}</span>` : ""}`
+          : html`<span class="error">No off-site copy configured</span>: backups are stored on the same volume as the
+              database. Set <code>TINYRSS_BACKUP_S3_BUCKET</code> (and credentials) to also upload them, or download
+              them below.`}
+      </p>
+      <form method="post" action="/backups" class="inline"><button>Back up now</button></form>
+      ${shown.length
+        ? html`<table style="margin-top: .5rem">
+            ${shown.map(
+              (b) => html`<tr>
+                <td><a href="/backups/${b.name}">${b.name}</a></td>
+                <td><small>${b.kind}</small></td>
+                <td class="num"><small>${fmtBytes(b.size)}</small></td>
+              </tr>`,
+            )}
+          </table>
+          ${local.length > shown.length ? html`<p class="muted">…and ${local.length - shown.length} older.</p>` : ""}`
+        : ""}
+      <p class="muted">
+        To restore, run <code>tinyrss restore &lt;name&gt;</code> in the container, then restart it.
+      </p>
+    `;
+  }
+
+  app.post("/backups", async (c) => {
+    if (!opts.backups) return c.notFound();
+    try {
+      const r = await createBackup(db, opts.backups, "manual");
+      const s3 = r.s3Error ? ` Upload to S3 failed: ${r.s3Error}` : r.s3Key ? " Uploaded to S3." : "";
+      return redirectWithFlash(c, "/", `Backup created: ${r.file.split("/").pop()} (${fmtBytes(r.size)}).${s3}`);
+    } catch (e) {
+      return redirectWithFlash(c, "/", `Backup failed: ${(e as Error).message}`);
+    }
+  });
+
+  app.get("/backups/:name", (c) => {
+    const name = c.req.param("name");
+    if (!opts.backups || !BACKUP_FILE_RE.test(name)) return c.notFound();
+    const path = join(opts.backups.dir, name);
+    return existsSync(path)
+      ? new Response(Bun.file(path), {
+          headers: {
+            "Content-Type": "application/vnd.sqlite3",
+            "Content-Disposition": `attachment; filename="${name}"`,
+          },
+        })
+      : c.notFound();
   });
 
   app.post("/feeds", async (c) => {

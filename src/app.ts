@@ -1,9 +1,18 @@
 import { Hono } from "hono";
+import type { BackupSettings } from "./backup.ts";
 import type { DB } from "./db.ts";
 import { greaderApi } from "./greader.ts";
 import { webUi } from "./web.ts";
 
-export function createApp(db: DB, opts: { warning?: string | null } = {}): Hono {
+export interface AppOptions {
+  /** Shown as a banner in the web UI. */
+  warning?: string | null;
+  /** Enables the backups section of the web UI. */
+  dbPath?: string;
+  backups?: BackupSettings;
+}
+
+export function createApp(db: DB, opts: AppOptions = {}): Hono {
   const app = new Hono();
   const greader = greaderApi(db);
 

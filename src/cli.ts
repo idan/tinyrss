@@ -1,10 +1,19 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { getUsername, hasCredentials, listTokens, revokeAllTokens, setCredentials } from "./auth.ts";
 import { config } from "./config.ts";
+import {
+  backupSettings,
+  cancelPendingRestore,
+  createBackup,
+  describeS3Error,
+  fmtBytes,
+  listLocalBackups,
+  listS3Backups,
+  stageRestore,
+} from "./backup.ts";
 import { type DB, openDb } from "./db.ts";
+import { snapshotTo } from "./snapshot.ts";
 import { discoverFeed, fetchFeed, fetchFeeds } from "./fetcher.ts";
 import { exportOpml, importOpml } from "./opml.ts";
 import { addFeed, deleteFeed, feedDisplayTitle, findFeed, listFeeds } from "./store.ts";
@@ -27,9 +36,11 @@ Commands:
   remove <url-or-id>                 Unsubscribe
   list                               List subscriptions
   refresh [--force]                  Fetch all feeds now
-  backup <file> [--keep N]           Write a consistent snapshot of the database (safe while
-                                     the server runs). "{date}" in the name is replaced by a
-                                     timestamp; --keep prunes older snapshots of that pattern.
+  backup [--to FILE]                 Back up now (to the backup dir, rotated, and to S3 if
+                                     configured), or write a single snapshot to FILE
+  backups                            List local (and S3) backups
+  restore <name|path|s3:name>        Stage a backup to be restored on the next server start
+  restore --cancel                   Cancel a staged restore
 
 Global options:
   --db PATH     SQLite database path (default: $TINYRSS_DB or ./data/tinyrss.db)
@@ -90,7 +101,8 @@ async function main() {
       title: { type: "string" },
       fetch: { type: "boolean" },
       force: { type: "boolean" },
-      keep: { type: "string" },
+      to: { type: "string" },
+      cancel: { type: "boolean" },
       api: { type: "boolean" },
       web: { type: "boolean" },
       "password-stdin": { type: "boolean" },
@@ -110,7 +122,46 @@ async function main() {
     return;
   }
 
-  const db: DB = openDb(dbPath);
+  const backups = backupSettings(dbPath);
+
+  // Commands that must work even if the database can't be opened (e.g. it's too new or broken).
+  if (cmd === "backups") {
+    const local = listLocalBackups(backups.dir);
+    console.log(`Local backups in ${backups.dir}:`);
+    if (!local.length) console.log("  (none)");
+    for (const b of local) console.log(`  ${b.name}  ${fmtBytes(b.size)}`);
+    if (backups.s3) {
+      console.log(`\nS3 backups in s3://${backups.s3.bucket}/${backups.s3.prefix}:`);
+      try {
+        const remote = await listS3Backups(backups.s3);
+        if (!remote.length) console.log("  (none)");
+        for (const b of remote) console.log(`  s3:${b.name}  ${fmtBytes(b.size)}`);
+      } catch (e) {
+        console.log(`  (unavailable: ${describeS3Error(e, backups.s3)})`);
+        process.exitCode = 1;
+      }
+    }
+    return;
+  }
+  if (cmd === "restore") {
+    if (values.cancel) {
+      console.log(cancelPendingRestore(dbPath) ? "Staged restore cancelled." : "No restore was staged.");
+      return;
+    }
+    if (!args[0]) throw new Error("usage: restore <name|path|s3:name>  (see `backups`)");
+    const { label, version } = await stageRestore(dbPath, args[0], backups);
+    console.log(`Staged ${label} (schema v${version}).`);
+    console.log(
+      "It is applied when tinyrss starts (restart the container), or within seconds if the server is in\n" +
+        "maintenance mode. The current database is backed up first; `tinyrss restore --cancel` undoes this.",
+    );
+    return;
+  }
+
+  const db: DB = openDb(dbPath, {
+    backupDir: backups.dir,
+    onBackup: (file, from, to) => console.log(`Upgraded database schema v${from} → v${to} (backup: ${file})`),
+  });
   try {
     switch (cmd) {
       case "set-password": {
@@ -195,38 +246,26 @@ async function main() {
         }
         break;
       }
+      case "backup": {
+        if (values.to) {
+          console.log(`Wrote ${snapshotTo(db, values.to)}`);
+          break;
+        }
+        const r = await createBackup(db, backups, "manual");
+        console.log(`Wrote ${r.file} (${fmtBytes(r.size)})`);
+        if (r.pruned.length) console.log(`Removed ${r.pruned.length} old backup(s).`);
+        if (r.s3Key) console.log(`Uploaded to s3://${backups.s3!.bucket}/${r.s3Key}`);
+        if (r.s3Error) throw new Error(`upload to S3 failed: ${r.s3Error}`);
+        break;
+      }
       case "refresh":
         await refresh(db, !!values.force);
         break;
-      case "backup": {
-        if (!args[0]) throw new Error("usage: backup <file> [--keep N]");
-        await backup(db, args[0], values.keep ? Number(values.keep) : undefined);
-        break;
-      }
       default:
         throw new Error(`unknown command "${cmd}" (see --help)`);
     }
   } finally {
     db.close();
-  }
-}
-
-async function backup(db: DB, pattern: string, keep?: number) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const target = resolve(pattern.replace("{date}", stamp));
-  if (existsSync(target)) throw new Error(`${target} already exists`);
-  mkdirSync(dirname(target), { recursive: true });
-  db.query("VACUUM INTO ?").run(target);
-  console.log(`Backed up to ${target}`);
-  if (keep !== undefined && pattern.includes("{date}")) {
-    if (!Number.isInteger(keep) || keep < 1) throw new Error("--keep must be a positive integer");
-    const [prefix, suffix] = basename(pattern).split("{date}") as [string, string];
-    const old = readdirSync(dirname(target))
-      .filter((f) => f.startsWith(prefix) && f.endsWith(suffix) && f.length === prefix.length + stamp.length + suffix.length)
-      .sort()
-      .slice(0, -keep);
-    for (const f of old) rmSync(join(dirname(target), f));
-    if (old.length) console.log(`Removed ${old.length} old backup(s).`);
   }
 }
 
