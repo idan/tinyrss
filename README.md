@@ -38,47 +38,64 @@ The API is also served at `/api/greader.php` and at the host root (`/accounts/Cl
 (Caddy, nginx, Tailscale serve, …) if it's reachable from outside your machine; `X-Forwarded-Proto`
 and `X-Forwarded-Host` are respected.
 
-## Deploying with Docker / Coolify
+## Self-hosting
 
-The repo includes a `Dockerfile` (runs as non-root, with a built-in healthcheck) and a
-`docker-compose.yml`. Inside the container:
+Prebuilt images for `linux/amd64` and `linux/arm64` are published to
+`ghcr.io/idan/tinyrss:<version>` (also tagged `<major>.<minor>` and `latest`). Inside the container:
 
 - the database lives at `/data/tinyrss.db`, so **`/data` must be a persistent volume**. If it isn't, the
   server logs a warning and shows a banner in the web UI;
 - the CLI is available as `tinyrss <command>`, e.g. `tinyrss refresh`;
-- credentials can come from `TINYRSS_USERNAME` (default `admin`) / `TINYRSS_PASSWORD`. They are
-  applied at startup. If they changed, all apps and browsers are logged out. If you prefer to
-  manage the password with `tinyrss set-password`, leave `TINYRSS_PASSWORD` empty.
+- credentials come from `TINYRSS_USERNAME` (default `admin`) / `TINYRSS_PASSWORD`. They are applied
+  at startup. If they changed, all apps and browsers are logged out. If you prefer to manage the
+  password with `tinyrss set-password`, leave `TINYRSS_PASSWORD` empty;
+- the server runs as uid 1000, and the image has a healthcheck (`tinyrss healthcheck`).
 
-### Coolify (Docker Compose build pack, recommended)
+### Coolify
 
-The compose file declares the volume, so there's no way to forget it.
+[`coolify/tinyrss.yaml`](coolify/tinyrss.yaml) is a ready-made Coolify service definition. It
+declares the data volume and the healthcheck, and has Coolify generate the password.
 
-1. Push this repo to GitHub/GitLab (Coolify can deploy private repos via its GitHub App).
-2. Point a DNS record (e.g. `rss.example.com`) at your Coolify server.
-3. In Coolify: **Project → New Resource → (Public/Private) Repository**, pick the repo and branch,
-   then set **Build Pack** to **Docker Compose** (compose file `/docker-compose.yml`).
-4. **Domains**: on the `tinyrss` service, set the domain to `https://rss.example.com:8080`.
-   The `:8080` tells Coolify's proxy which container port to route to. It is not exposed
-   publicly, and HTTPS certificates are issued automatically.
-5. **Environment Variables**: Coolify lists the variables found in the compose file. Set
-   `TINYRSS_PASSWORD` (≥ 8 characters) and optionally `TINYRSS_USERNAME`. For off-site
-   backups, also fill in the `TINYRSS_BACKUP_S3_*` variables (see [Backups](#backups--restore)).
-6. **Deploy**. The logs should show `tinyrss listening on …`, no volume warning, and a
-   `backups: …` line confirming where backups go. The first backup is written 30 seconds after
-   startup.
-7. Open `https://rss.example.com`, log in, and import your OPML (or add feeds).
-8. In your reader apps use `https://rss.example.com/api/greader` as the server URL.
+1. Point a DNS record (e.g. `rss.example.com`) at your Coolify server.
+2. In Coolify, open a project and choose **+ New → Docker Compose Empty**.
+3. Paste the contents of [`coolify/tinyrss.yaml`](coolify/tinyrss.yaml) and save.
+4. Set the `tinyrss` service's domain to `https://rss.example.com:8080`. The `:8080` tells Coolify's
+   proxy which container port to route to. It is not exposed publicly, and HTTPS certificates are
+   issued automatically. If Coolify already generated a domain, replace only the hostname.
+5. Optional: under **Environment Variables**, change `TINYRSS_USERNAME` (default `admin`), and fill in
+   the `TINYRSS_BACKUP_S3_*` variables for off-site backups (see [Backups](#backups--restore)).
+6. **Deploy**. The logs should show `tinyrss <version> listening on …`, no volume warning, and a
+   `backups: …` line confirming where backups go.
+7. Find the generated password in **Environment Variables** as `SERVICE_PASSWORD_TINYRSS`, then
+   open `https://rss.example.com` and log in as `admin`.
+8. Import your OPML in the web UI, then add `https://rss.example.com/api/greader` to your reader apps
+   (see [Connecting a reader app](#connecting-a-reader-app)).
 
-### Coolify (Dockerfile build pack)
+### Upgrading
 
-Same as above, but choose **Dockerfile** as the build pack, then:
+Images are pinned to a version. To upgrade, change the tag (in Coolify: **Edit Compose File**,
+`image: ghcr.io/idan/tinyrss:<new version>`) and redeploy. If the new version changes the database
+schema, it upgrades the database on startup and saves a `pre-migration` backup first. To roll
+back across a schema change, restore that backup (see [Rolling back a release](#backups--restore)).
 
-- set **Ports Exposes** to `8080` and the domain to `https://rss.example.com`;
-- under **Persistent Storage**, add a **Volume Mount** with destination `/data`. Use a volume, not a
-  directory (bind) mount: a new volume inherits the right ownership from the image, while a host
-  directory has to be `chown 1000:1000`;
-- add the environment variables under **Environment Variables**.
+### Docker / Docker Compose
+
+```sh
+docker run -d --name tinyrss --restart unless-stopped -p 8080:8080 -v tinyrss-data:/data \
+  -e TINYRSS_PASSWORD='change me please' ghcr.io/idan/tinyrss:0.1.0
+```
+
+`coolify/tinyrss.yaml` also works as a plain Compose file. Set `SERVICE_PASSWORD_TINYRSS` (the
+password) in the environment or a `.env` file, and add a `ports:` mapping to reach it.
+
+### Building from source (e.g. a fork)
+
+`docker-compose.yml` builds the image from this repository instead of pulling it, with the same
+volume and settings. On Coolify, create a resource from your **Git repository** and choose the
+**Docker Compose** build pack. Then set the domain as above and `TINYRSS_PASSWORD` under
+Environment Variables. With the **Dockerfile** build pack instead, set **Ports Exposes** to `8080`
+and add a **Volume Mount** at `/data`. Use a volume rather than a directory mount: a directory
+would have to be `chown 1000:1000`.
 
 ## Backups & restore
 
@@ -125,15 +142,6 @@ container keeps running, so you can open its terminal and either redeploy the ne
 `tinyrss restore` the `pre-migration` backup. In maintenance mode a staged restore is picked up
 within seconds, without a restart.
 
-### Plain Docker
-
-```sh
-docker build -t tinyrss .
-docker run -d --name tinyrss --restart unless-stopped \
-  -p 8080:8080 -v tinyrss-data:/data -e TINYRSS_PASSWORD='change me please' tinyrss
-# or: uncomment `ports:` in docker-compose.yml and run `docker compose up -d`
-```
-
 ## CLI
 
 ```
@@ -155,6 +163,8 @@ bun run cli <command>
                                      or write a single snapshot to FILE
   backups                            List local and S3 backups
   restore <name|path|s3:name>        Stage a restore, applied on next start (--cancel to undo)
+  healthcheck                        Exit 0 if the local server is healthy
+  version                            Print the version
 
   --db PATH                          Database path (default $TINYRSS_DB or ./data/tinyrss.db)
 ```
@@ -240,3 +250,19 @@ the database as it was.
 4. `bun test`. The migration tests upgrade **every** committed fixture version to the latest, check
    that no data was lost, and run the API against the result. They also fail if an
    already-released migration was modified.
+
+### Releasing
+
+Pushing a `vX.Y.Z` tag runs the tests and publishes a multi-arch image to GHCR
+(`.github/workflows/release.yml`).
+
+1. Bump `version` in `package.json` and the image tag in `coolify/tinyrss.yaml`. A test checks that
+   they match, and the workflow checks that the tag matches.
+2. `git commit -am "Release X.Y.Z" && git tag vX.Y.Z && git push --follow-tags`
+
+After the first release, check that the package is public: GitHub → your profile → **Packages** →
+`tinyrss` → **Package settings** → **Change visibility**.
+
+## License
+
+[MIT](LICENSE)

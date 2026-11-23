@@ -4,6 +4,7 @@ import { config } from "./config.ts";
 import { type DB, openDb, SchemaTooNewError } from "./db.ts";
 import { applyPendingRestore, backupSettings, hasPendingRestore, startBackupScheduler } from "./backup.ts";
 import { startScheduler } from "./fetcher.ts";
+import { VERSION } from "./version.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -84,7 +85,7 @@ export async function serve(opts: { port?: number; hostname?: string; dbPath?: s
     fetch: app.fetch,
     idleTimeout: 120, // refreshing many feeds from the web UI can take a while
   });
-  log(`tinyrss listening on ${server.url} (db: ${dbPath})`);
+  log(`tinyrss ${VERSION} listening on ${server.url} (db: ${dbPath})`);
   if (!hasCredentials(db)) {
     log("WARNING: no credentials configured; set TINYRSS_PASSWORD or run `tinyrss set-password <username>`");
   }
@@ -118,7 +119,7 @@ function maintenance(
   ctx: { dbPath: string; port: number; hostname: string; log: (msg: string) => void; restart: (port: number) => Promise<unknown> },
 ) {
   const { log } = ctx;
-  log(`ERROR: cannot use the database: ${error.message}`);
+  log(`ERROR: tinyrss ${VERSION} cannot use the database: ${error.message}`);
   log("running in maintenance mode: fix the problem (e.g. `tinyrss backups`, then `tinyrss restore <name>`) and it will start automatically");
   const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tinyrss: maintenance</title>

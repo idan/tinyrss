@@ -1,5 +1,12 @@
 {
   "name": "tinyrss",
+  "version": "0.1.0",
+  "description": "Single-user RSS reader with a Google Reader compatible API",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/idan/tinyrss.git"
+  },
   "type": "module",
   "private": true,
   "bin": {

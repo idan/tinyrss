@@ -14,11 +14,12 @@ import {
 } from "./backup.ts";
 import { type DB, openDb } from "./db.ts";
 import { snapshotTo } from "./snapshot.ts";
+import { VERSION } from "./version.ts";
 import { discoverFeed, fetchFeed, fetchFeeds } from "./fetcher.ts";
 import { exportOpml, importOpml } from "./opml.ts";
 import { addFeed, deleteFeed, feedDisplayTitle, findFeed, listFeeds } from "./store.ts";
 
-const HELP = `tinyrss — single-user RSS reader with a Google Reader compatible API
+const HELP = `tinyrss ${VERSION} — single-user RSS reader with a Google Reader compatible API
 
 Usage: bun run cli <command> [options]   (in the Docker image: tinyrss <command>)
 
@@ -36,6 +37,8 @@ Commands:
   remove <url-or-id>                 Unsubscribe
   list                               List subscriptions
   refresh [--force]                  Fetch all feeds now
+  healthcheck                        Exit 0 if the local server answers /healthz (for Docker)
+  version                            Print the version
   backup [--to FILE]                 Back up now (to the backup dir, rotated, and to S3 if
                                      configured), or write a single snapshot to FILE
   backups                            List local (and S3) backups
@@ -107,9 +110,14 @@ async function main() {
       web: { type: "boolean" },
       "password-stdin": { type: "boolean" },
       help: { type: "boolean", short: "h" },
+      version: { type: "boolean", short: "v" },
     },
   });
   const [cmd, ...args] = positionals;
+  if (values.version || cmd === "version") {
+    console.log(VERSION);
+    return;
+  }
   if (!cmd || values.help || cmd === "help") {
     console.log(HELP);
     return;
@@ -120,6 +128,16 @@ async function main() {
     const { serve } = await import("./server.ts");
     await serve({ dbPath, port: values.port ? Number(values.port) : undefined, hostname: values.host });
     return;
+  }
+
+  if (cmd === "healthcheck") {
+    // Talks to the running server rather than the database, so it reflects what users see
+    // (including maintenance mode, which answers 503).
+    const port = values.port ?? String(config.port);
+    const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(5000) }).catch((e) => e as Error);
+    if (res instanceof Response && res.ok) return;
+    console.error(`unhealthy: ${res instanceof Response ? `HTTP ${res.status}` : res.message}`);
+    process.exit(1);
   }
 
   const backups = backupSettings(dbPath);
